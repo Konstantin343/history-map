@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="map"></div>
+</body>
+<script>
+    function inside(point, vs) {
+        // ray-casting algorithm based on
+        // https://wrf.ecse.rpi.edu/Research/Short_Notes/pnpoly.html
+
+        var x = point[0], y = point[1];
+
+        var inside = false;
+        for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+            var xi = vs[i][0], yi = vs[i][1];
+            var xj = vs[j][0], yj = vs[j][1];
+
+            var intersect = ((yi > y) != (yj > y))
+                && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+            if (intersect) inside = !inside;
+        }
+
+        return inside;
+    };
+
+    var map = L.map('map').setView([35.165505, 33.370778], 15);
+    var pane = map.createPane("fixed", document.getElementById("map"));
+    var layer = L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.{ext}', {
+        minZoom: 0,
+        maxZoom: 20,
+        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        ext: 'png'
+    });
+    layer.addTo(map)
+    var delta = 0.0003
+    var polygon = null
+    var polygonLayer = null
+
+    var inProgress = false
+
+    map.on("click", function (e) {
+        if (inProgress) return
+        inProgress = true
+
+        const emptyIcon = L.icon({iconUrl: 'Empty.png'})
+        const marker = L.marker([e.latlng.lat, e.latlng.lng], {
+            icon: emptyIcon
+        }).addTo(map);
+        const popup = L.popup({
+            pane: "fixed",
+            className: "popup-fixed test",
+            autoPan: false,
+        }).setContent("Loading...");
+        map.on("popupclose", function (e) {
+            map.removeLayer(marker)
+        });
+
+        marker.bindPopup(popup).openPopup()
+
+        const query = `
+[out:json];
+(
+  way["building"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
+  relation["building"]["type"="multipolygon"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
+);
+out geom;
+`;
+        const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+        console.log(url)
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                try {
+                    console.log(data.elements)
+                    var insidePolygons = data.elements.filter((x) => {
+                        if (x.type === "relation")
+                            return inside([e.latlng.lat, e.latlng.lng], x.members.filter((m) => m.role === "outer")[0].geometry.map((x) => [x.lat, x.lon]))
+                        if (x.type === "way")
+                            return inside([e.latlng.lat, e.latlng.lng], x.geometry.map((x) => [x.lat, x.lon]))
+                        return false
+                    })
+                    console.log(insidePolygons)
+                    if (insidePolygons.length === 0) {
+                        map.removeLayer(polygonLayer)
+                        polygonLayer = null
+                        polygon = null
+                        map.closePopup(popup)
+                        return;
+                    }
+                    var _polygon = null
+                    if (insidePolygons[0].type === "relation")
+                        _polygon = insidePolygons[0].members.filter((m) => m.role === "outer")[0].geometry
+                    else
+                        _polygon = insidePolygons[0].geometry
+                    if (polygon != null && polygon.toString() == _polygon.toString()) {
+                        map.removeLayer(polygonLayer)
+                        polygonLayer = null
+                        polygon = null
+                        map.closePopup(popup)
+                        return
+                    }
+                    if (polygon != null) {
+                        map.removeLayer(polygonLayer)
+                        polygonLayer = null
+                        polygon = null
+                    }
+
+
+                    polygon = _polygon
+                    polygonLayer = L.polygon(polygon, {
+                        color: "#00ff48",
+                        weight: 1,
+                    })
+                    polygonLayer.addTo(map)
+
+                    const content = Object.entries(insidePolygons[0].tags)
+                        .map(([key, value]) => {
+                                if (key === "website" || key === "image") {
+                                    return `<p><strong>${key}:</strong> <a href="${value}" target="_blank">${value}</a></p>`;
+                                } else {
+                                    return `<p><strong>${key}:</strong> ${value}</p>`
+                                }
+                            }
+                        )
+                        .join("");
+                    popup.setContent(content)
+                } finally {
+                    inProgress = false
+                }
+            })
+            .catch(error => console.error("Error fetching buildings:", error));
+    });
+
+
+</script>
+</html>
