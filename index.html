@@ -15,6 +15,23 @@
 <div id="map"></div>
 </body>
 <script>
+    const debounce = (func, wait, immediate) => {
+        let timeout
+
+        return function() {
+            const context = this, args = arguments
+            const later = function() {
+                timeout = null
+                if (!immediate) func.apply(context, args)
+            }
+
+            const callNow = immediate && !timeout
+            clearTimeout(timeout)
+            timeout = setTimeout(later, wait)
+            if (callNow) func.apply(context, args)
+        }
+    }
+
     function inside(point, vs) {
         // ray-casting algorithm based on
         // https://wrf.ecse.rpi.edu/Research/Short_Notes/pnpoly.html
@@ -34,11 +51,13 @@
         return inside;
     };
 
-    var map = L.map('map').setView([35.165505, 33.370778], 15);
+    var map = L.map('map').setView([35.165505, 33.370778], 16);
     var pane = map.createPane("fixed", document.getElementById("map"));
-    var layer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    var layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        minZoom: 0,
+        maxZoom: 20,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd'
     });
     layer.addTo(map)
     var delta = 0.0003
@@ -46,6 +65,52 @@
     var polygonLayer = null
 
     var inProgress = false
+
+    function drawLevels() {
+        const bounds = map.getBounds()
+        const query1 = `
+[out:json];
+(
+  way["building"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+);
+out geom;
+`;
+        const url1 = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query1);
+        console.log(url1)
+        fetch(url1)
+            .then(response => response.json())
+            .then(data => {
+                data.elements.forEach((e) => {
+                    if (e.type === "way") {
+                        const level = e.tags["building:levels"]
+                        if (level === undefined) return
+                        var color = "#ffffff"
+                        if (level < 5)
+                            color = "#5bfd5c"
+                        else if (level < 10)
+                            color = "#e4f40a"
+                        else if (level < 15)
+                            color = "#ff9900"
+                        else if (level < 20)
+                            color = "#d51717"
+                        else if (level >= 20)
+                            color = "#841288"
+                        L.polygon(e.geometry, {
+                            color: color,
+                            weight: 1,
+                        }).addTo(map)
+                    }
+                })
+            })
+    }
+    drawLevels()
+    map.on('moveend', debounce(() => {
+        drawLevels()
+    }, 1000));
+    map.on('zoomend', debounce(() => {
+        drawLevels()
+    }, 1000));
+
 
     map.on("click", function (e) {
         if (inProgress) return
@@ -80,7 +145,6 @@ out geom;
             .then(response => response.json())
             .then(data => {
                 try {
-                    console.log(data.elements)
                     var insidePolygons = data.elements.filter((x) => {
                         if (x.type === "relation")
                             return inside([e.latlng.lat, e.latlng.lng], x.members.filter((m) => m.role === "outer")[0].geometry.map((x) => [x.lat, x.lon]))
@@ -88,7 +152,6 @@ out geom;
                             return inside([e.latlng.lat, e.latlng.lng], x.geometry.map((x) => [x.lat, x.lon]))
                         return false
                     })
-                    console.log(insidePolygons)
                     if (insidePolygons.length === 0) {
                         map.removeLayer(polygonLayer)
                         polygonLayer = null
@@ -101,7 +164,7 @@ out geom;
                         _polygon = insidePolygons[0].members.filter((m) => m.role === "outer")[0].geometry
                     else
                         _polygon = insidePolygons[0].geometry
-                    if (polygon != null && polygon.toString() === _polygon.toString()) {
+                    if (polygon != null && polygon.toString() == _polygon.toString()) {
                         map.removeLayer(polygonLayer)
                         polygonLayer = null
                         polygon = null
@@ -117,7 +180,7 @@ out geom;
 
                     polygon = _polygon
                     polygonLayer = L.polygon(polygon, {
-                        color: "#00ff48",
+                        color: "#015be6",
                         weight: 1,
                     })
                     polygonLayer.addTo(map)
@@ -133,6 +196,8 @@ out geom;
                         )
                         .join("");
                     popup.setContent(content)
+                } catch (e) {
+                    map.closePopup(popup)
                 } finally {
                     inProgress = false
                 }
