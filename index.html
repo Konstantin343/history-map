@@ -51,7 +51,11 @@
         return inside;
     };
 
-    var map = L.map('map').setView([35.165505, 33.370778], 16);
+    const params = new Map(window.location.search.replace('?', "").split('&').map((x) => x.split('=')))
+    const lat = params.get("lat") === undefined ? 35.165505 : parseFloat(params.get('lat'))
+    const lon = params.get('lon') === undefined ? 33.370778 : parseFloat(params.get('lon'))
+    const zoom = params.get('zoom') === undefined ? 16 : parseInt(params.get('zoom'))
+    var map = L.map('map').setView([lat, lon], zoom);
     var pane = map.createPane("fixed", document.getElementById("map"));
     var layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         minZoom: 0,
