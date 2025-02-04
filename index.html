@@ -66,6 +66,7 @@
 
     var inProgress = false
 
+    var currentPolygons = [];
     function drawLevels() {
         const bounds = map.getBounds()
         const query1 = `
@@ -80,6 +81,10 @@ out geom;
         fetch(url1)
             .then(response => response.json())
             .then(data => {
+                currentPolygons.forEach((p) => {
+                    map.removeLayer(p)
+                })
+                currentPolygons = []
                 data.elements.forEach((e) => {
                     if (e.type === "way") {
                         const level = e.tags["building:levels"]
@@ -95,10 +100,13 @@ out geom;
                             color = "#d51717"
                         else if (level >= 20)
                             color = "#841288"
-                        L.polygon(e.geometry, {
+
+                        const p = L.polygon(e.geometry, {
                             color: color,
                             weight: 1,
-                        }).addTo(map)
+                        })
+                        currentPolygons.push(p)
+                        p.addTo(map)
                     }
                 })
             })
