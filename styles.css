@@ -34,6 +34,8 @@ body {
     transform: none !important;
     margin: 0;
     border-radius: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 @media (min-width: 700px) {
@@ -42,6 +44,8 @@ body {
         height: 100% !important;
         right: 0 !important;
         left: auto !important;
+        overflow-x: hidden;
+        overflow-y: auto;
     }
 
     .leaflet-popup-content-wrapper {

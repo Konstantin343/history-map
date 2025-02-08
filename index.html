@@ -54,7 +54,7 @@
     const params = new Map(window.location.search.replace('?', "").split('&').map((x) => x.split('=')))
     const lat = params.get("lat") === undefined ? 35.165505 : parseFloat(params.get('lat'))
     const lon = params.get('lon') === undefined ? 33.370778 : parseFloat(params.get('lon'))
-    const zoom = params.get('zoom') === undefined ? 16 : parseInt(params.get('zoom'))
+    const zoom = params.get('zoom') === undefined ? 17 : parseInt(params.get('zoom'))
     var map = L.map('map').setView([lat, lon], zoom);
     var pane = map.createPane("fixed", document.getElementById("map"));
     var layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -77,6 +77,7 @@
 [out:json];
 (
   way["building"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+  relation["building"]["type"="multipolygon"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
 );
 out geom;
 `;
@@ -90,28 +91,34 @@ out geom;
                 })
                 currentPolygons = []
                 data.elements.forEach((e) => {
-                    if (e.type === "way") {
-                        const level = e.tags["building:levels"]
-                        if (level === undefined) return
-                        var color = "#ffffff"
-                        if (level < 5)
-                            color = "#5bfd5c"
-                        else if (level < 10)
-                            color = "#e4f40a"
-                        else if (level < 15)
-                            color = "#ff9900"
-                        else if (level < 20)
-                            color = "#d51717"
-                        else if (level >= 20)
-                            color = "#841288"
-
-                        const p = L.polygon(e.geometry, {
-                            color: color,
-                            weight: 1,
-                        })
-                        currentPolygons.push(p)
-                        p.addTo(map)
+                    var w = null
+                    if (e.type === "way")
+                        w = e
+                    else {
+                        w = e.members.filter((m) => m.role === "outer")[0]
                     }
+
+                    const level = e.tags["building:levels"]
+                    var color = "#ffffff"
+                    if (level === undefined)
+                        color = "#ffffff"
+                    else if (level < 5)
+                        color = "#5bfd5c"
+                    else if (level < 10)
+                        color = "#e4f40a"
+                    else if (level < 15)
+                        color = "#ff9900"
+                    else if (level < 20)
+                        color = "#d51717"
+                    else if (level >= 20)
+                        color = "#841288"
+
+                    const p = L.polygon(w.geometry, {
+                        color: color,
+                        weight: 1,
+                    })
+                    currentPolygons.push(p)
+                    p.addTo(map)
                 })
             })
     }
@@ -125,8 +132,8 @@ out geom;
 
 
     map.on("click", function (e) {
-        if (inProgress) return
-        inProgress = true
+        // if (inProgress) return
+        // inProgress = true
 
         const emptyIcon = L.icon({iconUrl: 'Empty.png'})
         const marker = L.marker([e.latlng.lat, e.latlng.lng], {
@@ -143,78 +150,167 @@ out geom;
 
         marker.bindPopup(popup).openPopup()
 
-        const query = `
-[out:json];
-(
-  way["building"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
-  relation["building"]["type"="multipolygon"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
-);
-out geom;
-`;
-        const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+        function convertWGS84ToEPSG3857(lat, lon) {
+            const R = 6378137; // Earth’s radius in meters
+            const x = lon * R * Math.PI / 180;
+            const y = R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 360)));
+            return [x, y];
+        }
+
+        function convertEPSG3857ToWGS84(x, y) {
+            const R = 6378137; // Earth’s radius in meters
+            const lon = (x / R / Math.PI) * 180;
+            const lat = (Math.atan(Math.exp(y / R)) * 360 / Math.PI) - 90;
+            return [lat, lon];
+        }
+
+        function groupBy(list, keyGetter, valueTransformer, filter) {
+            const map = new Map();
+            list.forEach((item) => {
+                if (!filter(item)) return
+                const key = keyGetter(item);
+                const collection = map.get(key);
+                if (!collection) {
+                    map.set(key, [valueTransformer(item)]);
+                } else {
+                    collection.push(valueTransformer(item));
+                }
+            });
+            return map;
+        }
+
+        let [x, y] = convertWGS84ToEPSG3857(e.latlng.lat, e.latlng.lng)
+        const url = `https://eservices.dls.moi.gov.cy/arcgis/rest/services/National/CadastralMap_EN/MapServer/identify?geometry=${x}%2C${y}&geometryType=esriGeometryPoint&sr=&layers=0%2C1%2C2%2C3%2C4%2C5%2C6%2C7&layerDefs=&time=&timeRelation=esriTimeRelationOverlaps&layerTimeOptions=&tolerance=3&mapExtent=${x}%2C${y}%2C${x}%2C${y}&imageDisplay=1728%2C442%2C96&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&dynamicLayers=&returnZ=false&returnM=false&gdbVersion=&historicMoment=&returnUnformattedValues=false&returnFieldName=false&datumTransformations=&layerParameterValues=&mapRangeValues=&layerRangeValues=&clipping=&spatialFilter=&f=json`
         console.log(url)
         fetch(url)
             .then(response => response.json())
             .then(data => {
-                try {
-                    var insidePolygons = data.elements.filter((x) => {
-                        if (x.type === "relation")
-                            return inside([e.latlng.lat, e.latlng.lng], x.members.filter((m) => m.role === "outer")[0].geometry.map((x) => [x.lat, x.lon]))
-                        if (x.type === "way")
-                            return inside([e.latlng.lat, e.latlng.lng], x.geometry.map((x) => [x.lat, x.lon]))
-                        return false
-                    })
-                    if (insidePolygons.length === 0) {
-                        map.removeLayer(polygonLayer)
-                        polygonLayer = null
-                        polygon = null
-                        map.closePopup(popup)
-                        return;
-                    }
-                    var _polygon = null
-                    if (insidePolygons[0].type === "relation")
-                        _polygon = insidePolygons[0].members.filter((m) => m.role === "outer")[0].geometry
-                    else
-                        _polygon = insidePolygons[0].geometry
-                    if (polygon != null && polygon.toString() == _polygon.toString()) {
-                        map.removeLayer(polygonLayer)
-                        polygonLayer = null
-                        polygon = null
-                        map.closePopup(popup)
-                        return
-                    }
-                    if (polygon != null) {
-                        map.removeLayer(polygonLayer)
-                        polygonLayer = null
-                        polygon = null
-                    }
-
-
-                    polygon = _polygon
-                    polygonLayer = L.polygon(polygon, {
-                        color: "#015be6",
-                        weight: 1,
-                    })
-                    polygonLayer.addTo(map)
-
-                    const content = Object.entries(insidePolygons[0].tags)
-                        .map(([key, value]) => {
-                                if (key === "website" || key === "image") {
-                                    return `<p><strong>${key}:</strong> <a href="${value}" target="_blank">${value}</a></p>`;
-                                } else {
-                                    return `<p><strong>${key}:</strong> ${value}</p>`
-                                }
+                const id = data['results'][0]['attributes']['SBPI_ID_NO']
+                const geometry = data['results'][0]['geometry']['rings'][0].map((ring) => convertEPSG3857ToWGS84(ring[0], ring[1]))
+                L.polygon(geometry, {
+                    color: "rgba(114,210,232,0.39)",
+                    weight: 1,
+                }).addTo(map)
+                const query = `
+[out:json];
+(
+  way["building"](poly:"${geometry.map((g) => g[0] + " " + g[1]).join(" ")}");
+  relation["building"]["type"="multipolygon"](poly:"${geometry.map((g) => g[0] + " " + g[1]).join(" ")}");
+);
+out geom;
+`;
+                const url2 = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+                fetch(url2)
+                    .then(response => response.json())
+                    .then(data => {
+                        data.elements.forEach((e) => {
+                            var w
+                            if (e.type === "way")
+                                w = e
+                            else {
+                                w = e.members.filter((m) => m.role === "outer")[0]
                             }
-                        )
-                        .join("");
-                    popup.setContent(content)
-                } catch (e) {
-                    map.closePopup(popup)
-                } finally {
-                    inProgress = false
-                }
-            })
-            .catch(error => console.error("Error fetching buildings:", error));
+
+                            var color = "#015de6"
+                            const p = L.polygon(w.geometry, {
+                                color: color,
+                                weight: 1,
+                            })
+                            p.addTo(map)
+                        })
+                    })
+                // const url4 = `https://cors-anywhere.herokuapp.com/https://eservices.dls.moi.gov.cy/Services/Rest/Info/GetParcelUnitFiscalInformation?parcelId=${id}`
+                // fetch(url4)
+                //     .then(response => response.json())
+                //     .then(data => {
+                //         const groupedById = groupBy(data["unitFiscalData"], (x) => x["UnitId"], (x) => [x["DbFieldNameCodeEnDescr"], x["FisValue"]], (x) => x["FisValue"] !== "")
+                //         const units = data["parcelUnits"]
+                //         groupedById.forEach((v, k) => {
+                //             const unit = units.filter((y) => y["PrUnitId"] == k)[0]
+                //             v.unshift(["Name", unit["PrSubPropertyKind"]["PrNameEn"]])
+                //         })
+                //
+                //         let content = ""
+                //         groupedById.forEach((v, k) =>
+                //             content += `<details><summary><strong>${v.filter(([k1, v1]) => k1 === "Name")[0][1]}</strong></summary>` + v.map(([k1, v1]) => `<p><strong>* ${k1}:</strong> ${v1}</p>`).join("") + "</details>"
+                //         )
+                //         popup.setContent(
+                //             content + `<p><strong>2gis:</strong> <a href="https://2gis.com.cy/cyprus/geo/${e.latlng.lng}%2C${e.latlng.lat}?m=${e.latlng.lng}%2C${e.latlng.lat}%2F17" target="_blank">2gis.com.cy</a></p>`
+                //         )
+                //     })
+            });
+//         const query = `
+// [out:json];
+// (
+//   way["building"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
+//   relation["building"]["type"="multipolygon"](${e.latlng.lat - delta},${e.latlng.lng - delta},${e.latlng.lat + delta},${e.latlng.lng + delta});
+// );
+// out geom;
+// `;
+//         const url2 = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+//         // console.log(url)
+//         fetch(url2)
+//             .then(response => response.json())
+//             .then(data => {
+//                 try {
+//                     var insidePolygons = data.elements.filter((x) => {
+//                         if (x.type === "relation")
+//                             return inside([e.latlng.lat, e.latlng.lng], x.members.filter((m) => m.role === "outer")[0].geometry.map((x) => [x.lat, x.lon]))
+//                         if (x.type === "way")
+//                             return inside([e.latlng.lat, e.latlng.lng], x.geometry.map((x) => [x.lat, x.lon]))
+//                         return false
+//                     })
+//                     if (insidePolygons.length === 0) {
+//                         map.removeLayer(polygonLayer)
+//                         polygonLayer = null
+//                         polygon = null
+//                         // map.closePopup(popup)
+//                         return;
+//                     }
+//                     var _polygon = null
+//                     if (insidePolygons[0].type === "relation")
+//                         _polygon = insidePolygons[0].members.filter((m) => m.role === "outer")[0].geometry
+//                     else
+//                         _polygon = insidePolygons[0].geometry
+//                     if (polygon != null && polygon.toString() == _polygon.toString()) {
+//                         map.removeLayer(polygonLayer)
+//                         polygonLayer = null
+//                         polygon = null
+//                         // map.closePopup(popup)
+//                         return
+//                     }
+//                     if (polygon != null) {
+//                         map.removeLayer(polygonLayer)
+//                         polygonLayer = null
+//                         polygon = null
+//                     }
+//
+//
+//                     polygon = _polygon
+//                     polygonLayer = L.polygon(polygon, {
+//                         color: "#015be6",
+//                         weight: 1,
+//                     })
+//                     polygonLayer.addTo(map)
+//
+//                     // const content = Object.entries(insidePolygons[0].tags)
+//                     //     .map(([key, value]) => {
+//                     //             if (key === "website" || key === "image") {
+//                     //                 return `<p><strong>${key}:</strong> <a href="${value}" target="_blank">${value}</a></p>`;
+//                     //             } else {
+//                     //                 return `<p><strong>${key}:</strong> ${value}</p>`
+//                     //             }
+//                     //         }
+//                     //     )
+//                     //     .join("");
+//                     // popup.setContent(content)
+//                 } catch (e) {
+//                     // map.closePopup(popup)
+//                 } finally {
+//                     inProgress = false
+//                 }
+//             })
+//             .catch(error => console.error("Error fetching buildings:", error));
     });
 
 
